@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
-#include "gmem/naive.cuh"
+#include "gmem/1_naive.cuh"
+#include "gmem/2_global_memory_coalescing.cuh"
+
 
 #define M 256  // Number of rows in A and C
 #define K 512   // Number of columns in A and rows in B
@@ -70,6 +72,9 @@ int main() {
     init_matrix(h_A, M, K);
     init_matrix(h_B, K, N);
 
+    float alpha = 0.5;
+    float beta = 0.3;
+
 
     cudaMalloc(&d_A, size_A);
     cudaMalloc(&d_B, size_B);
@@ -85,7 +90,7 @@ int main() {
     printf("Performing warm-up runs...\n");
     for (int i = 0; i < 3; i++) {
         matmul_cpu(h_A, h_B, h_C, M, K, N);
-        myKernels::naive<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
+        myKernels::sgemm_naive<<<gridDim, blockDim>>>(M, K, N, alpha, d_A, d_B, beta, d_C);
         cudaDeviceSynchronize();
     }
 
@@ -106,17 +111,31 @@ int main() {
     double gpu_total_time = 0.0;
     for (int i = 0; i < 20; i++) {
         double start_time = get_time();
-        myKernels::naive<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
+        myKernels::sgemm_naive<<<gridDim, blockDim>>>(M, K, N, alpha, d_A, d_B, beta, d_C);
         cudaDeviceSynchronize();
         double end_time = get_time();
         gpu_total_time += end_time - start_time;
     }
     double gpu_avg_time = gpu_total_time / 20.0;
 
+    // Benchmark GM Coalescing implementation
+    printf("Benchmarking GM Coalescing implementation...\n");
+    double gmc_total_time = 0.0;
+    for (int i = 0; i < 20; i++) {
+        double start_time = get_time();
+        myKernels::gm_coalescing_sgmem<<<gridDim, blockDim>>>(M, K, N, alpha, d_A, d_B, beta, d_C);
+        cudaDeviceSynchronize();
+        double end_time = get_time();
+        gmc_total_time += end_time - start_time;
+    }
+    double gmc_avg_time = gmc_total_time / 20.0;
+
     // Print results
     printf("CPU average time: %f microseconds\n", (cpu_avg_time * 1e6f));
     printf("GPU average time: %f microseconds\n", (gpu_avg_time * 1e6f));
-    printf("Speedup: %fx\n", cpu_avg_time / gpu_avg_time);
+    printf("GM Coalescing average time: %f microseconds\n", (gmc_avg_time * 1e6f));
+
+    printf("Speedup: %fx\n", cpu_avg_time / gmc_avg_time);
 
     // Free memory
     free(h_A);
